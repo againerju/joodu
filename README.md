@@ -8,3 +8,9 @@ Julian Wiederer, Julian Schmidt, Ulrich Kressel, Klaus Dietmayer, Vasileios Bela
 <br>
 *Accepted for presentation at [IROS 2023](https://ieee-iros.org/) in Detroit, MI, US.*
 <br>
+
+<!---![joodu](./images/method.png)--->
+
+<div align="center">
+<img src="https://github.com/againerju/joodu/blob/master/images/method.png" width = 80% height = 80%>
+</div>
