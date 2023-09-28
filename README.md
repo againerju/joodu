@@ -2,7 +2,7 @@
 
 This is the official project page including the paper and the code.
 
-**Joint Out-of-Distribution Detection and Uncertainty Estimation for Trajectory Prediction**
+**[Joint Out-of-Distribution Detection and Uncertainty Estimation for Trajectory Prediction](https://arxiv.org/abs/2308.01707)**
 <br>
 Julian Wiederer, Julian Schmidt, Ulrich Kressel, Klaus Dietmayer, Vasileios Belagiannis
 <br>
