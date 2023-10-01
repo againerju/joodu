@@ -55,8 +55,6 @@ conda activate joodu
 Install the API for the Shifts Vehicle Motion Prediction Dataset as described here:\
 https://github.com/Shifts-Project/shifts/tree/main/sdc
 
-
-
 ### Install Argoverse API
 The argoverse-api is used to convert the HD-map provided by Shifts into the Argoverse format, which is consumed by the trajectory prediction model.
 
