@@ -81,6 +81,9 @@ chmod +x scripts/download_model.sh
 ./download_model.sh
 ```
 
+## Train Model
+Under construction - coming soon.
+
 ## Test Model on Evaluation Set
 
 
