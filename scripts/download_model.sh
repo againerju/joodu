@@ -1,7 +1,7 @@
 #!/bin/sh
 
-MODEL_LINK=https://drive.google.com/file/d/1AiOQyH32vkpx4QXhTcmc9m9QrhFL4Y5P/view?usp=drive_link
+MODEL_LINK='https://drive.google.com/uc?id=1AiOQyH32vkpx4QXhTcmc9m9QrhFL4Y5P'
 
 cd experiments
-wget ${MODEL_LINK}
+gdown ${MODEL_LINK}
 unzip joodu.zip
