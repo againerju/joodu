@@ -240,14 +240,16 @@ class Evaluator(object):
 
         for mk, mv in self.trajectory_prediction_metrics.items():
 
-            if not np.isnan(mv).any():
+            if mk not in self.black_list:
 
-                mv = np.array(mv)
+                if not np.isnan(mv).any():
 
-                fig = plot_retention_curve_with_baselines(e_hat, mv, metric_name=mk, group_by_uncertainty=True)
-                
-                plt.savefig(os.path.join(self.eval_path, f"retention_curve_{mk}.png"), dpi=300)     
-                plt.close(fig)   
+                    mv = np.array(mv)
+
+                    fig = plot_retention_curve_with_baselines(e_hat, mv, metric_name=mk, group_by_uncertainty=True)
+                    
+                    plt.savefig(os.path.join(self.eval_path, f"retention_curve_{mk}.png"), dpi=300)     
+                    plt.close(fig)   
 
 
     def select_top_d_trajectories(self, predictions: np.ndarray, confidences: np.ndarray):
