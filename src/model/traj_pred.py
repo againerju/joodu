@@ -3,13 +3,16 @@ import pytorch_lightning as pl
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import List, Tuple
 
 from src.model.losses import GaussianMixtureNLLLoss
 from src.model.global_interactor import GlobalInteractor
 from src.model.local_encoder import LocalEncoder
 from src.model.decoder import MLPDecoder
+from src.metrics import ade, fde, wade, wfde, mr
 from utils import TemporalData, rotate_trajectory
+
 
 class TrajPredEncoderDecoder(pl.LightningModule):
     """ Trajectory prediction model, adopted from HiVT.    
@@ -34,9 +37,11 @@ class TrajPredEncoderDecoder(pl.LightningModule):
                  weight_decay: float = 0.001,
                  T_max: int = 64,
                  mask_target_agents: bool = True,
+                 **kwargs,
                  ) -> None:
         super(TrajPredEncoderDecoder, self).__init__()
         self.save_hyperparameters()
+        self.historical_steps = historical_steps
         self.rotate = rotate
         self.lr = lr
         self.weight_decay = weight_decay
@@ -64,14 +69,21 @@ class TrajPredEncoderDecoder(pl.LightningModule):
                                                   rotate=rotate)
 
         self.decoder = MLPDecoder(local_channels=embed_dim,
-                                global_channels=embed_dim,
-                                future_steps=future_steps,
-                                num_modes=num_modes,
-                                uncertain=True,
-                                scale_dim=1)
+                                  global_channels=embed_dim,
+                                  future_steps=future_steps,
+                                  num_modes=num_modes,
+                                  uncertain=True,
+                                  scale_dim=1)
 
         # loss
         self.reg_loss = GaussianMixtureNLLLoss(reduction='mean')
+
+        # metrics
+        self.minADE = ade.MinADE()
+        self.wADE = wade.WADE()
+        self.minFDE = fde.MinFDE()
+        self.wFDE = wfde.WFDE()
+        self.MR = mr.MR()
 
         # latent features
         self.h = None
@@ -80,7 +92,6 @@ class TrajPredEncoderDecoder(pl.LightningModule):
         self.mu = None
         self.pi = None
         self.scale = None
-
 
     def forward(self, data: TemporalData) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -107,15 +118,16 @@ class TrajPredEncoderDecoder(pl.LightningModule):
 
         # encoding
         local_embed = self.local_encoder(data=data)
-        global_embed = self.global_interactor(data=data, local_embed=local_embed)
+        global_embed = self.global_interactor(
+            data=data, local_embed=local_embed)
 
         # latent features
         self.h = local_embed
 
         # decoding
-        loc_scale, pi = self.decoder(local_embed=local_embed, global_embed=global_embed)
+        loc_scale, pi = self.decoder(
+            local_embed=local_embed, global_embed=global_embed)
         return loc_scale, pi
-
 
     def training_step(self, data, batch_idx):
         """
@@ -130,9 +142,9 @@ class TrajPredEncoderDecoder(pl.LightningModule):
         loc_scale, pi = self(data)
         y_hat, scale = loc_scale.chunk(2, dim=-1)
 
-        # padding mask 
+        # padding mask
         reg_mask = ~data['padding_mask'][:, self.historical_steps:]
-                
+
         # ground truth
         y = data.y
 
@@ -141,17 +153,44 @@ class TrajPredEncoderDecoder(pl.LightningModule):
 
         # compute loss
         if self.mask_target_agents:
-            assert len(agent_index) > 0, "At least one target agent needs to be valid."
-            reg_loss = self.reg_loss(y_hat[:, agent_index], pi[agent_index], scale[:, agent_index], y[agent_index], reg_mask[agent_index])
+            assert len(
+                agent_index) > 0, "At least one target agent needs to be valid."
+            reg_loss = self.reg_loss(y_hat[:, agent_index], pi[agent_index],
+                                     scale[:, agent_index], y[agent_index], reg_mask[agent_index])
         else:
             reg_loss = self.reg_loss(pi, y_hat, scale, y, reg_mask)
 
-        self.log('train_reg_loss', reg_loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
+        self.log('train_reg_loss', reg_loss, prog_bar=True,
+                 on_step=True, on_epoch=True, batch_size=1, sync_dist=True)
 
         return reg_loss
-    
 
-    def validation_step(self, data, batch_idx):
+    def compute_regression_loss(self, y_hat, pi, scale, y, agent_index, reg_mask):
+        """Method computes the regression loss.
+
+        Args:
+            y_hat: predicted trajectories, [K, N, T, 2]
+            pi: mode coefficents, [N, K]
+            scale: standard deviation of Gaussian mixture distributions, [K, N, T, 1]
+            y: ground truth trajectory, [N, T, 2]
+            agent_index: tensor of agent indices, [M]
+            reg_mask: mask of available time steps, [N, T]
+
+        Return:
+            reg_loss: regression loss
+
+        """
+        if self.mask_target_agents:
+            assert len(
+                agent_index) > 0, "At least one target agent needs to be valid."
+            reg_loss = self.reg_loss(y_hat[:, agent_index], pi[agent_index],
+                                     scale[:, agent_index], y[agent_index], reg_mask[agent_index])
+        else:
+            reg_loss = self.reg_loss(pi, y_hat, scale, y, reg_mask)
+
+        return reg_loss
+
+    def validation_step(self, data, eval=False):
         """
         Method predicts a distribution over future trajectories given the current batch.
 
@@ -159,18 +198,52 @@ class TrajPredEncoderDecoder(pl.LightningModule):
             data: current batch of data.
             batch_index: index of current batch.       
         """
-        
+
         # forward
-        loc_scale, pi = self(data)
+        loc_scale, pi = self(data)  # loc_scale: [K, N, T, 3], pi: [N, K]
+        # y_hat: [K, N, T, 2], scale: [K, N, T, 1]
         y_hat, scale = loc_scale.chunk(2, dim=-1)
 
         # log predictions
-        self.mu = torch.swapaxes(rotate_trajectory(y_hat, data.rotate_mat), 0, 1)  # N x K x T x 2
-        self.pi = pi # N x K
-        self.scale = torch.swapaxes(scale, 0, 1) # N x K x T x 1
+        self.mu = torch.swapaxes(rotate_trajectory(
+            y_hat, data.rotate_mat), 0, 1)  # N x K x T x 2
+        self.pi = pi  # N x K
+        self.scale = torch.swapaxes(scale, 0, 1)  # N x K x T x 1
 
+        # compute metrics
+        if not eval:
+            agent_index = data.agent_index[data.valid]
+            y_agent = torch.index_select(data.y, 0, agent_index)
+            y_hat_agent = torch.swapaxes(
+                torch.index_select(y_hat, 1, agent_index), 0, 1)
+            pi_agent = F.softmax(torch.index_select(
+                pi, 0, agent_index), dim=-1)
+            self.minADE.update(y_hat_agent, y_agent)
+            self.minFDE.update(y_hat_agent, y_agent)
+            self.wADE.update(y_hat_agent, pi_agent, y_agent)
+            self.wFDE.update(y_hat_agent, pi_agent, y_agent)
+            self.MR.update(y_hat_agent, y_agent)
 
-    def get_predictions(self, agent_index: List[int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            # compute loss
+            reg_mask = ~data['padding_mask'][:, self.historical_steps:]
+            reg_loss = self.compute_regression_loss(
+                y_hat, pi, scale, data.y, agent_index, reg_mask)
+
+            # log metrics
+            self.log('val_reg_loss', reg_loss, prog_bar=True,
+                     on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
+            self.log('val_minADE', self.minADE, prog_bar=True, on_step=False,
+                     on_epoch=True, batch_size=y_agent.size(0), sync_dist=True)
+            self.log('val_wADE', self.wADE, prog_bar=True, on_step=False,
+                     on_epoch=True, batch_size=y_agent.size(0), sync_dist=True)
+            self.log('val_minFDE', self.minFDE, prog_bar=True, on_step=False,
+                     on_epoch=True, batch_size=y_agent.size(0), sync_dist=True)
+            self.log('val_wFDE', self.wFDE, prog_bar=True, on_step=False,
+                     on_epoch=True, batch_size=y_agent.size(0), sync_dist=True)
+            self.log('val_MR', self.MR, prog_bar=True, on_step=False,
+                     on_epoch=True, batch_size=y_agent.size(0), sync_dist=True)
+
+    def get_predictions(self, agent_index: List[int], numpy=False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Method returns the current prediction given the target agent indices.
         Args:
@@ -183,16 +256,18 @@ class TrajPredEncoderDecoder(pl.LightningModule):
 
         """
 
-        mu = self.mu.detach().cpu().numpy()
-        pi = self.pi.detach().cpu().numpy()
-        scale = self.scale.detach().cpu().numpy()
+        mu = self.mu
+        pi = self.pi
+        scale = self.scale
 
         y_hat_agent = mu[agent_index, :, :, : 2]
         pi_agent = pi[agent_index]
-        sigma_agent = scale[agent_index, :, :, 0] 
+        sigma_agent = scale[agent_index, :, :, 0]
 
-        return y_hat_agent, pi_agent, sigma_agent
-    
+        if numpy:
+            return y_hat_agent.detach().cpu().numpy(), pi_agent.detach().cpu().numpy(), sigma_agent.detach().cpu().numpy()
+        else:
+            return y_hat_agent, pi_agent, sigma_agent
 
     def get_latent_features(self) -> torch.Tensor:
         """
@@ -205,7 +280,6 @@ class TrajPredEncoderDecoder(pl.LightningModule):
 
         return self.h
 
-
     def configure_optimizers(self):
         """
         Configuration of the training optimizer.
@@ -213,11 +287,14 @@ class TrajPredEncoderDecoder(pl.LightningModule):
         """
         decay = set()
         no_decay = set()
-        whitelist_weight_modules = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.MultiheadAttention, nn.LSTM, nn.GRU)
-        blacklist_weight_modules = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LayerNorm, nn.Embedding)
+        whitelist_weight_modules = (
+            nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.MultiheadAttention, nn.LSTM, nn.GRU)
+        blacklist_weight_modules = (
+            nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LayerNorm, nn.Embedding)
         for module_name, module in self.named_modules():
             for param_name, param in module.named_parameters():
-                full_param_name = '%s.%s' % (module_name, param_name) if module_name else param_name
+                full_param_name = '%s.%s' % (
+                    module_name, param_name) if module_name else param_name
                 if 'bias' in param_name:
                     no_decay.add(full_param_name)
                 elif 'weight' in param_name:
@@ -227,7 +304,8 @@ class TrajPredEncoderDecoder(pl.LightningModule):
                         no_decay.add(full_param_name)
                 elif not ('weight' in param_name or 'bias' in param_name):
                     no_decay.add(full_param_name)
-        param_dict = {param_name: param for param_name, param in self.named_parameters()}
+        param_dict = {param_name: param for param_name,
+                      param in self.named_parameters()}
         inter_params = decay & no_decay
         union_params = decay | no_decay
         assert len(inter_params) == 0
@@ -240,6 +318,28 @@ class TrajPredEncoderDecoder(pl.LightningModule):
              "weight_decay": 0.0},
         ]
 
-        optimizer = torch.optim.AdamW(optim_groups, lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=self.T_max, eta_min=0.0)
+        optimizer = torch.optim.AdamW(
+            optim_groups, lr=self.lr, weight_decay=self.weight_decay)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer=optimizer, T_max=self.T_max, eta_min=0.0)
         return [optimizer], [scheduler]
+
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = parent_parser.add_argument_group('TrajPred')
+        parser.add_argument('--historical_steps', type=int, default=25)
+        parser.add_argument('--future_steps', type=int, default=25)
+        parser.add_argument('--num_modes', type=int, default=5)
+        parser.add_argument('--node_dim', type=int, default=2)
+        parser.add_argument('--edge_dim', type=int, default=2)
+        parser.add_argument('--embed_dim', type=int, default=128)
+        parser.add_argument('--num_heads', type=int, default=8)
+        parser.add_argument('--dropout', type=float, default=0.1)
+        parser.add_argument('--num_temporal_layers', type=int, default=4)
+        parser.add_argument('--num_global_layers', type=int, default=3)
+        parser.add_argument('--local_radius', type=float, default=50)
+        parser.add_argument('--lr', type=float, default=1e-4)
+        parser.add_argument('--max_epochs', type=int, default=64)
+        parser.add_argument('--weight_decay', type=float, default=1e-4)
+        parser.add_argument('--T_max', type=int, default=64)
+        return parent_parser

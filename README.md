@@ -16,6 +16,7 @@ Julian Wiederer, Julian Schmidt, Ulrich Kressel, Klaus Dietmayer, Vasileios Bela
 </div>
 
 ## Citation
+Please cite our work, if you use our source code: 
 
 ```bibtex
 @InProceedings{wiederer2023joodu,
@@ -74,20 +75,43 @@ chmod +x scripts/fetch_shifts_dataset.sh
 The data is pre-processed online during the evaluation.
 
 ## Model
-Download the model parameters 
+Download the model parameters from [google drive](https://drive.google.com/file/d/1AiOQyH32vkpx4QXhTcmc9m9QrhFL4Y5P/view?usp=drive_link) by running
 
 ```
 chmod +x scripts/download_model.sh
 ./download_model.sh
 ```
 
-## Train Model
-Under construction - coming soon.
+## Train the Model
+The following command runs the two-stage training on the *Shifts train set*.\
+In case you run the training for the first time, the data pre-processing is performed online.
 
-## Test Model on Evaluation Set
+```
+python train.py
+```
 
+In case you would like to skip the first or the second stage, respectively, use the CLI commands below.
 
-The following command runs the evaluation on the Shifts eval set.\
+Train the **first stage** only, i.e. only the trajectory prediction model is trained:
+
+```
+python train.py --skip_ood_model_training --skip_uncertainty_model_training
+```
+
+Train the **second stage** only, i.e. only the _OOD detection model_ and _uncertainty estimation model_ are trained given an existing trajectory prediction model checkpoint under <traj_pred_model_path>:
+
+```
+python train.py --traj_pred_model_path <traj_pred_model_path>
+```
+
+For example you can use the checkpoint from the IROS publication
+
+```
+python train.py --traj_pred_model_path /experiments/traj_pred/000_enc_dec/model/enc_dec_iros_2023.ckpt
+```
+
+## Test the Model
+The following command runs the evaluation on the *Shifts eval set*.\
 In case you run the evaluation for the first time, the data pre-processing is performed online.
 
 ```

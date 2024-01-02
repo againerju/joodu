@@ -2,13 +2,13 @@ from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
 from torch_geometric.data import Data
+from datetime import datetime
 
 
 class TemporalData(Data):
     """
     Code adopted from https://github.com/ZikangZhou/HiVT
     """
-
 
     def __init__(self,
                  x: Optional[torch.Tensor] = None,
@@ -159,5 +159,15 @@ def rotate_trajectory(traj: torch.Tensor, rotate_mat: torch.Tensor) -> torch.Ten
 
     for i in range(traj_rot.shape[0]):
         traj_rot[i] = torch.bmm(traj[i], torch.inverse(rotate_mat))
-    
+
     return traj_rot
+
+
+def get_current_datetime_as_string() -> str:
+    """
+    Return the current datetime as string.
+
+    Return:
+        Current datetime as string.
+    """
+    return datetime.now().strftime("%Y-%m-%d__%H-%M-%S")

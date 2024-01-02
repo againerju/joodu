@@ -13,6 +13,7 @@ from src.model.e_reg import Ereg
 from src.model.lgmm import LGMM
 from src.model.traj_pred import TrajPredEncoderDecoder
 
+
 def parse_command_line_arguments(args: Optional[List[str]] = None) -> Namespace:
 
     parser = ArgumentParser()
@@ -37,45 +38,50 @@ def main(args: Optional[List[str]] = None) -> None:
     args = parse_command_line_arguments(args)
 
     # experiment
-    experiment_root = os.path.split(os.path.split(args.traj_pred_model_path)[0])[0]
+    experiment_root = os.path.split(
+        os.path.split(args.traj_pred_model_path)[0])[0]
 
     # trajectory prediction model
-    traj_pred_model = TrajPredEncoderDecoder.load_from_checkpoint(checkpoint_path=args.traj_pred_model_path, parallel=False, **vars(args))
+    traj_pred_model = TrajPredEncoderDecoder.load_from_checkpoint(
+        checkpoint_path=args.traj_pred_model_path, parallel=False, **vars(args))
     traj_pred_model.eval()
-    
+
     # latent Gaussian mixture model
     ood_model = LGMM(model_path=args.ood_detection_model_path)
 
     # error regression network
-    uncertainty_model = Ereg.load_from_checkpoint(checkpoint_path=args.uncertainty_model_path, **vars(args))
+    uncertainty_model = Ereg.load_from_checkpoint(
+        checkpoint_path=args.uncertainty_model_path, **vars(args))
     uncertainty_model.eval()
-    
+
     # dataset
-    val_dataset = ShiftsDataset(root=args.shifts_root, split=args.split, local_radius=traj_pred_model.hparams.local_radius)
+    val_dataset = ShiftsDataset(root=args.shifts_root, split=args.split,
+                                local_radius=traj_pred_model.hparams.local_radius)
     dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
                             pin_memory=args.pin_memory, persistent_workers=True)
 
     # evaluator
     evaluator = Evaluator()
-    evaluator.set_eval_path_from(experiment_root, 
-                                 kwargs=
-                                 {
+    evaluator.set_eval_path_from(experiment_root,
+                                 kwargs={
                                      "split": args.split,
                                      "ood": "lgmm",
                                      "u": "e_reg"
                                  })
-    
+
     for i, batch in enumerate(tqdm(dataloader)):
         with torch.no_grad():
 
             # ground truth
-            agent_index = batch.agent_index[batch.valid].detach().cpu().numpy().tolist()
+            agent_index = batch.agent_index[batch.valid].detach(
+            ).cpu().numpy().tolist()
             y = batch.y[agent_index].detach().cpu().numpy()
             alpha = batch.ood[agent_index].detach().cpu().numpy()
 
             # trajectory prediction
-            traj_pred_model.validation_step(batch, i)
-            y_hat, pi, sigma = traj_pred_model.get_predictions(agent_index)
+            traj_pred_model.validation_step(batch, i, eval=True)
+            y_hat, pi, sigma = traj_pred_model.get_predictions(
+                agent_index, numpy=True)
             y_hat, pi = evaluator.select_top_d_trajectories(y_hat, pi)
 
             # latent features
@@ -90,7 +96,8 @@ def main(args: Optional[List[str]] = None) -> None:
             e_hat = e_hat.squeeze(1).cpu().numpy()
 
             # compute metrics for batch
-            evaluator.compute_batch_metrics(y, y_hat, pi, sigma, alpha, alpha_hat, e_hat)
+            evaluator.compute_batch_metrics(
+                y, y_hat, pi, sigma, alpha, alpha_hat, e_hat)
 
     # evaluate
     evaluator.full_eval()

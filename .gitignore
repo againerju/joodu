@@ -1,3 +1,4 @@
 *.pyc
 
+# visual studio code
 .vscode/*
