@@ -12,7 +12,7 @@ Julian Wiederer, Julian Schmidt, Ulrich Kressel, Klaus Dietmayer, Vasileios Bela
 <!---![joodu](./images/method.png)--->
 
 <div align="center">
-<img src="https://github.com/againerju/joodu/blob/master/images/method.png" width = 80% height = 80%>
+<img src="https://github.com/againerju/joodu/blob/master/images/method.png" width = 80%>
 </div>
 
 ## Citation
